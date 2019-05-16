@@ -1,12 +1,15 @@
-import { Component, OnDestroy, OnInit } from '@angular/core';
-import { AbstractControl, FormControl, FormGroup } from '@angular/forms';
+import { Component, Input, OnDestroy, OnInit } from '@angular/core';
+import { AbstractControl, FormControl, FormGroup, Validators } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { NgbModal } from '@ng-bootstrap/ng-bootstrap';
 import { Subscription } from 'rxjs';
 import { HttpRequestService } from '../../../services/http-request.service';
 import { StatusMessageService } from '../../../services/status-message.service';
 import { MessageOutput } from '../../../types/api-output';
+import { StudentUpdateRequest } from '../../../types/api-request';
 import { ErrorMessageOutput } from '../../error-message-output';
+
+import { FormValidator } from '../../../types/form-validator';
 
 interface StudentAttributes {
   email: string;
@@ -34,6 +37,7 @@ interface StudentEditDetails {
 export class InstructorCourseStudentEditPageComponent implements OnInit, OnDestroy {
 
   user: string = '';
+  @Input() isEnabled: boolean = true;
   courseid: string = '';
   studentemail: string = '';
   student!: StudentAttributes;
@@ -48,6 +52,8 @@ export class InstructorCourseStudentEditPageComponent implements OnInit, OnDestr
   teamFieldSubscription?: Subscription;
   emailFieldSubscription?: Subscription;
 
+  FormValidator: typeof FormValidator = FormValidator; // enum
+
   constructor(private route: ActivatedRoute,
               private router: Router,
               private httpRequestService: HttpRequestService,
@@ -55,6 +61,21 @@ export class InstructorCourseStudentEditPageComponent implements OnInit, OnDestr
               private ngbModal: NgbModal) { }
 
   ngOnInit(): void {
+    if (!this.isEnabled) {
+      this.student = {
+        email: 'alice@email.com',
+        course: '',
+        name: 'Alice Betsy',
+        lastName: '',
+        comments: 'Alice is a transfer student.',
+        team: 'Team A',
+        section: 'Section A',
+      };
+      this.studentemail = this.student.email;
+      this.initEditForm();
+      return;
+    }
+
     this.route.queryParams.subscribe((queryParams: any) => {
       this.user = queryParams.user;
       this.courseid = queryParams.courseid;
@@ -63,8 +84,12 @@ export class InstructorCourseStudentEditPageComponent implements OnInit, OnDestr
   }
 
   ngOnDestroy(): void {
-    (this.emailFieldSubscription as Subscription).unsubscribe();
-    (this.teamFieldSubscription as Subscription).unsubscribe();
+    if (this.emailFieldSubscription) {
+      (this.emailFieldSubscription as Subscription).unsubscribe();
+    }
+    if (this.teamFieldSubscription) {
+      (this.teamFieldSubscription as Subscription).unsubscribe();
+    }
   }
 
   /**
@@ -94,10 +119,14 @@ export class InstructorCourseStudentEditPageComponent implements OnInit, OnDestr
    */
   private initEditForm(): void {
     this.editForm = new FormGroup({
-      studentname: new FormControl(this.student.name),
-      sectionname: new FormControl(this.student.section),
-      teamname: new FormControl(this.student.team),
-      newstudentemail: new FormControl(this.studentemail), // original student email initialized
+      studentname: new FormControl(this.student.name,
+          [Validators.required, Validators.maxLength(FormValidator.STUDENT_NAME_MAX_LENGTH)]),
+      sectionname: new FormControl(this.student.section,
+          [Validators.required, Validators.maxLength(FormValidator.SECTION_NAME_MAX_LENGTH)]),
+      teamname: new FormControl(this.student.team,
+          [Validators.required, Validators.maxLength(FormValidator.TEAM_NAME_MAX_LENGTH)]),
+      newstudentemail: new FormControl(this.studentemail, // original student email initialized
+          [Validators.required, Validators.maxLength(FormValidator.EMAIL_MAX_LENGTH)]),
       comments: new FormControl(this.student.comments),
     });
     this.teamFieldSubscription =
@@ -112,10 +141,28 @@ export class InstructorCourseStudentEditPageComponent implements OnInit, OnDestr
   }
 
   /**
+   * Displays message to user stating that the field is empty.
+   */
+  displayEmptyFieldMessage(fieldName: string): string {
+    return `The field '${fieldName}' should not be empty.`;
+  }
+
+  /**
+   * Displays message to user stating that the field exceeds the max length.
+   */
+  displayExceedMaxLengthMessage(fieldName: string, maxLength: number): string {
+    return `The field '${fieldName}' should not exceed ${maxLength} characters.`;
+  }
+
+  /**
    * Handles logic related to showing the appropriate modal boxes
    * upon submission of the form. Submits the form otherwise.
    */
   onSubmit(confirmDelModal: any, resendPastLinksModal: any): void {
+    if (!this.isEnabled) {
+      return;
+    }
+
     if (this.isTeamnameFieldChanged) {
       this.ngbModal.open(confirmDelModal);
     } else if (this.isEmailFieldChanged) {
@@ -157,11 +204,18 @@ export class InstructorCourseStudentEditPageComponent implements OnInit, OnDestr
       user: this.user,
       courseid: this.courseid,
       studentemail: this.studentemail,
-      sessionsummarysendemail: this.isSessionSummarySendEmail.toString(),
-      ...this.editForm.value,
     };
 
-    this.httpRequestService.put('/courses/students/details/edit', paramsMap)
+    const reqBody: StudentUpdateRequest = {
+      name: this.editForm.value.studentname,
+      email: this.editForm.value.newstudentemail,
+      team: this.editForm.value.teamname,
+      section: this.editForm.value.sectionname,
+      comments: this.editForm.value.comments,
+      isSessionSummarySendEmail: this.isSessionSummarySendEmail,
+    };
+
+    this.httpRequestService.put('/student', paramsMap, reqBody)
       .subscribe((resp: MessageOutput) => {
         this.router.navigate(['/web/instructor/courses/details'], {
           queryParams: { courseid: this.courseid },

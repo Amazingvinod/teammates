@@ -12,7 +12,7 @@ import teammates.common.datatransfer.attributes.FeedbackQuestionAttributes;
 import teammates.common.datatransfer.questions.FeedbackMcqQuestionDetails;
 import teammates.common.util.AppUrl;
 import teammates.common.util.Const;
-import teammates.e2e.util.BackDoor;
+import teammates.test.driver.BackDoor;
 import teammates.test.pageobjects.InstructorFeedbackEditPage;
 import teammates.test.pageobjects.InstructorFeedbackResultsPage;
 
@@ -20,7 +20,7 @@ import teammates.test.pageobjects.InstructorFeedbackResultsPage;
  * SUT: {@link Const.WebPageURIs.INSTRUCTOR_SESSION_EDIT_PAGE},
  *      specifically for multiple choice (single answer) questions.
  */
-public class FeedbackMcqQuestionUiTest extends FeedbackQuestionUiTest {
+public class FeedbackMcqQuestionUiTest extends BaseFeedbackQuestionUiTest {
 
     private static final int NEW_QUESTION_INDEX = -1;
     private static final String QN_TYPE = "mcq";
@@ -738,7 +738,7 @@ public class FeedbackMcqQuestionUiTest extends FeedbackQuestionUiTest {
                 .withParam(Const.ParamsNames.FEEDBACK_RESULTS_SORTTYPE, "question");
 
         InstructorFeedbackResultsPage instructorResultsPage =
-                loginAdminToPage(editUrl, InstructorFeedbackResultsPage.class);
+                loginAdminToPageOld(editUrl, InstructorFeedbackResultsPage.class);
 
         ______TS("Show statistics for mcq question without weights enabled");
 

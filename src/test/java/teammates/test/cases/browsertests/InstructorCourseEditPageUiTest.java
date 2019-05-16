@@ -11,7 +11,7 @@ import teammates.common.util.AppUrl;
 import teammates.common.util.Const;
 import teammates.common.util.FieldValidator;
 import teammates.e2e.cases.e2e.BaseE2ETestCase;
-import teammates.e2e.util.BackDoor;
+import teammates.test.driver.BackDoor;
 import teammates.test.driver.StringHelperExtension;
 import teammates.test.pageobjects.AppPage;
 import teammates.test.pageobjects.InstructorCourseDetailsPage;
@@ -730,7 +730,9 @@ public class InstructorCourseEditPageUiTest extends BaseE2ETestCase {
                 new InstructorPrivileges(Const.InstructorPermissionRoleNames.INSTRUCTOR_PERMISSION_ROLE_COOWNER);
         privilege.updatePrivilege(Const.ParamsNames.INSTRUCTOR_PERMISSION_MODIFY_INSTRUCTOR, false);
         InstructorAttributes instructor = InstructorAttributes
-                .builder("InsCrsEdit.reg", courseId, "Teammates Reg", "InsCrsEdit.reg@gmail.tmt")
+                .builder(courseId, "InsCrsEdit.reg@gmail.tmt")
+                .withGoogleId("InsCrsEdit.reg")
+                .withName("Teammates Reg")
                 .withDisplayedName("Teammates Reg")
                 .withRole(Const.InstructorPermissionRoleNames.INSTRUCTOR_PERMISSION_ROLE_CUSTOM)
                 .withPrivileges(privilege)
@@ -840,7 +842,7 @@ public class InstructorCourseEditPageUiTest extends BaseE2ETestCase {
                                     .withUserId(instructorId)
                                     .withCourseId(courseId);
 
-        return loginAdminToPage(courseEditPageLink, InstructorCourseEditPage.class);
+        return loginAdminToPageOld(courseEditPageLink, InstructorCourseEditPage.class);
     }
 
 }

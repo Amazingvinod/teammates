@@ -1,13 +1,22 @@
 import { Component, OnInit } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { NgbModal } from '@ng-bootstrap/ng-bootstrap';
+import { CourseService } from '../../../services/course.service';
 import { FeedbackQuestionsService } from '../../../services/feedback-questions.service';
 import { FeedbackSessionsService } from '../../../services/feedback-sessions.service';
 import { HttpRequestService } from '../../../services/http-request.service';
 import { NavigationService } from '../../../services/navigation.service';
 import { StatusMessageService } from '../../../services/status-message.service';
 import { TimezoneService } from '../../../services/timezone.service';
-import { FeedbackSession, FeedbackSessions, MessageOutput } from '../../../types/api-output';
+import {
+  Course,
+  Courses,
+  FeedbackSession,
+  FeedbackSessions,
+  InstructorPrivilege,
+  MessageOutput,
+} from '../../../types/api-output';
+import { DEFAULT_INSTRUCTOR_PRIVILEGE } from '../../../types/instructor-privilege';
 import {
   CopySessionResult,
   SessionsTableColumn,
@@ -16,9 +25,7 @@ import {
   SortBy,
   SortOrder,
 } from '../../components/sessions-table/sessions-table-model';
-import { Course, Courses } from '../../course';
 import { ErrorMessageOutput } from '../../error-message-output';
-import { defaultInstructorPrivilege, InstructorPrivilege } from '../../instructor-privilege';
 import { InstructorSessionBasePageComponent } from '../instructor-session-base-page.component';
 
 interface CourseTabModel {
@@ -56,10 +63,16 @@ export class InstructorHomePageComponent extends InstructorSessionBasePageCompon
   // data
   courseTabModels: CourseTabModel[] = [];
 
-  constructor(router: Router, httpRequestService: HttpRequestService,
-              statusMessageService: StatusMessageService, navigationService: NavigationService,
-              feedbackSessionsService: FeedbackSessionsService, feedbackQuestionsService: FeedbackQuestionsService,
-              private route: ActivatedRoute, private ngbModal: NgbModal, private timezoneService: TimezoneService) {
+  constructor(router: Router,
+              httpRequestService: HttpRequestService,
+              statusMessageService: StatusMessageService,
+              navigationService: NavigationService,
+              feedbackSessionsService: FeedbackSessionsService,
+              feedbackQuestionsService: FeedbackQuestionsService,
+              private courseService: CourseService,
+              private route: ActivatedRoute,
+              private ngbModal: NgbModal,
+              private timezoneService: TimezoneService) {
     super(router, httpRequestService, statusMessageService, navigationService,
         feedbackSessionsService, feedbackQuestionsService);
     // need timezone data for moment()
@@ -85,8 +98,8 @@ export class InstructorHomePageComponent extends InstructorSessionBasePageCompon
    * Handles click events on the course tab model.
    */
   handleClick(event: Event, courseTabModel: CourseTabModel): boolean {
-    if (event.srcElement &&
-        !event.srcElement.className.includes('dropdown-toggle')) {
+    if (event.target &&
+        !(event.target as HTMLElement).className.includes('dropdown-toggle')) {
       return !courseTabModel.isTabExpanded;
     }
     return courseTabModel.isTabExpanded;
@@ -125,24 +138,27 @@ export class InstructorHomePageComponent extends InstructorSessionBasePageCompon
    * Deletes the entire course from the instructor
    */
   deleteCourse(courseId: string): void {
-    this.httpRequestService.delete('/course', { courseid: courseId })
-      .subscribe((resp: MessageOutput) => {
-        this.loadCourses();
-        this.statusMessageService.showSuccessMessage(resp.message);
-      }, (resp: ErrorMessageOutput) => {
-        this.statusMessageService.showErrorMessage(resp.error.message);
-      });
+    this.courseService.binCourse(courseId).subscribe((course: Course) => {
+      this.loadCourses();
+      this.statusMessageService.showSuccessMessage(
+        `The course ${course.courseId} has been deleted. You can restore it from the Recycle Bin manually.`);
+    }, (resp: ErrorMessageOutput) => {
+      this.statusMessageService.showErrorMessage(resp.error.message);
+    });
   }
   /**
    * Loads courses of current instructor.
    */
   loadCourses(): void {
     this.courseTabModels = [];
-    this.httpRequestService.get('/courses').subscribe((courses: Courses) => {
+    this.httpRequestService.get('/courses', {
+      entitytype: 'instructor',
+      coursestatus: 'active',
+    }).subscribe((courses: Courses) => {
       courses.courses.forEach((course: Course) => {
         const model: CourseTabModel = {
           course,
-          instructorPrivilege: defaultInstructorPrivilege,
+          instructorPrivilege: DEFAULT_INSTRUCTOR_PRIVILEGE,
           sessionsTableRowModels: [],
           isTabExpanded: false,
           isAjaxSuccess: true,
@@ -176,27 +192,26 @@ export class InstructorHomePageComponent extends InstructorSessionBasePageCompon
    */
   loadFeedbackSessions(model: CourseTabModel): void {
     if (!model.hasPopulated) {
-      this.httpRequestService.get('/sessions', {
-        courseid: model.course.courseId,
-      }).subscribe((response: FeedbackSessions) => {
-        response.feedbackSessions.forEach((feedbackSession: FeedbackSession) => {
-          const m: SessionsTableRowModel = {
-            feedbackSession,
-            responseRate: '',
-            isLoadingResponseRate: false,
-            instructorPrivilege: defaultInstructorPrivilege,
-          };
-          model.sessionsTableRowModels.push(m);
-          this.updateInstructorPrivilege(m);
-        });
-        model.hasPopulated = true;
-        if (!model.isAjaxSuccess) {
-          model.isAjaxSuccess = true;
-        }
-      }, (resp: ErrorMessageOutput) => {
-        model.isAjaxSuccess = false;
-        this.statusMessageService.showErrorMessage(resp.error.message);
-      });
+      this.feedbackSessionsService.getFeedbackSessionsForInstructor(model.course.courseId)
+          .subscribe((response: FeedbackSessions) => {
+            response.feedbackSessions.forEach((feedbackSession: FeedbackSession) => {
+              const m: SessionsTableRowModel = {
+                feedbackSession,
+                responseRate: '',
+                isLoadingResponseRate: false,
+                instructorPrivilege: DEFAULT_INSTRUCTOR_PRIVILEGE,
+              };
+              model.sessionsTableRowModels.push(m);
+              this.updateInstructorPrivilege(m);
+            });
+            model.hasPopulated = true;
+            if (!model.isAjaxSuccess) {
+              model.isAjaxSuccess = true;
+            }
+          }, (resp: ErrorMessageOutput) => {
+            model.isAjaxSuccess = false;
+            this.statusMessageService.showErrorMessage(resp.error.message);
+          });
     }
   }
 
@@ -324,8 +339,8 @@ export class InstructorHomePageComponent extends InstructorSessionBasePageCompon
   /**
    * Views the result of a feedback session.
    */
-  viewSessionResultEventHandler(): void {
-    this.viewSessionResult();
+  viewSessionResultEventHandler(tabIndex: number, rowIndex: number): void {
+    this.viewSessionResult(this.courseTabModels[tabIndex].sessionsTableRowModels[rowIndex]);
   }
 
   /**

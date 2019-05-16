@@ -2,7 +2,6 @@ package teammates.common.datatransfer.questions;
 
 import java.text.DecimalFormat;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -29,7 +28,6 @@ import teammates.common.util.Templates.FeedbackQuestion.Slots;
 import teammates.logic.core.CoursesLogic;
 import teammates.logic.core.InstructorsLogic;
 import teammates.logic.core.StudentsLogic;
-import teammates.ui.template.InstructorFeedbackResultsResponseRow;
 
 public class FeedbackMsqQuestionDetails extends FeedbackQuestionDetails {
     private static final Logger log = Logger.getLogger();
@@ -583,49 +581,6 @@ public class FeedbackMsqQuestionDetails extends FeedbackQuestionDetails {
     }
 
     @Override
-    public String getQuestionAdditionalInfoHtml(int questionNumber, String additionalInfoId) {
-        StringBuilder optionListHtml = new StringBuilder(200);
-        String optionFragmentTemplate = FormTemplates.MSQ_ADDITIONAL_INFO_FRAGMENT;
-
-        if (generateOptionsFor != FeedbackParticipantType.NONE) {
-            String optionHelpText = String.format(
-                    "<br>The options for this question is automatically generated from the list of all %s in this course.",
-                    generateOptionsFor.toString().toLowerCase());
-            optionListHtml.append(optionHelpText);
-        } else if (!msqChoices.isEmpty()) {
-            optionListHtml.append("<ul style=\"list-style-type: disc;margin-left: 20px;\" >");
-            for (String msqChoice : msqChoices) {
-                String optionFragment =
-                        Templates.populateTemplate(optionFragmentTemplate,
-                                Slots.MSQ_CHOICE_VALUE, SanitizationHelper.sanitizeForHtml(msqChoice));
-
-                optionListHtml.append(optionFragment);
-            }
-
-            if (otherEnabled) {
-                String optionFragment =
-                        Templates.populateTemplate(optionFragmentTemplate, Slots.MSQ_CHOICE_VALUE, "Other");
-                optionListHtml.append(optionFragment);
-            }
-
-            optionListHtml.append("</ul>");
-        }
-
-        String additionalInfo = Templates.populateTemplate(
-                FormTemplates.MSQ_ADDITIONAL_INFO,
-                Slots.QUESTION_TYPE_NAME, this.getQuestionTypeDisplayName(),
-                Slots.MSQ_ADDITIONAL_INFO_FRAGMENTS, optionListHtml.toString());
-
-        return Templates.populateTemplate(
-                FormTemplates.FEEDBACK_QUESTION_ADDITIONAL_INFO,
-                Slots.MORE, "[more]",
-                Slots.LESS, "[less]",
-                Slots.QUESTION_NUMBER, Integer.toString(questionNumber),
-                Slots.ADDITIONAL_INFO_ID, additionalInfoId,
-                Slots.QUESTION_ADDITIONAL_INFO, additionalInfo);
-    }
-
-    @Override
     public String getQuestionResultStatisticsHtml(List<FeedbackResponseAttributes> responses,
             FeedbackQuestionAttributes question,
             String studentEmail,
@@ -757,6 +712,12 @@ public class FeedbackMsqQuestionDetails extends FeedbackQuestionDetails {
                            + Const.FeedbackQuestion.MSQ_MIN_NUM_OF_CHOICES + ".");
             }
 
+            // If there are Empty Msq options entered trigger this error
+            boolean isEmptyMsqOptionEntered = msqChoices.stream().anyMatch(msqText -> msqText.trim().equals(""));
+            if (isEmptyMsqOptionEntered) {
+                errors.add(Const.FeedbackQuestion.MSQ_ERROR_EMPTY_MSQ_OPTION);
+            }
+
             // If weights are enabled, number of choices and weights should be same.
             // If a user enters an invalid weight for a valid choice,
             // the msqChoices.size() will be greater than msqWeights.size(), in that case
@@ -797,8 +758,8 @@ public class FeedbackMsqQuestionDetails extends FeedbackQuestionDetails {
         boolean isMaxSelectableChoicesEnabled = maxSelectableChoices != Integer.MIN_VALUE;
         boolean isMinSelectableChoicesEnabled = minSelectableChoices != Integer.MIN_VALUE;
 
+        int numOfMsqChoicesForGeneratedOptions = getNumOfChoicesForMsq(courseId, generateOptionsFor);
         if (isMaxSelectableChoicesEnabled) {
-            int numOfMsqChoicesForGeneratedOptions = getNumOfChoicesForMsq(courseId, generateOptionsFor);
             if (numOfMsqChoicesForGeneratedOptions < maxSelectableChoices) {
                 errors.add(Const.FeedbackQuestion.MSQ_ERROR_MAX_SELECTABLE_EXCEEDED_TOTAL);
             } else if (maxSelectableChoices < 2) {
@@ -806,8 +767,13 @@ public class FeedbackMsqQuestionDetails extends FeedbackQuestionDetails {
             }
         }
 
-        if (isMinSelectableChoicesEnabled && minSelectableChoices < 1) {
-            errors.add(Const.FeedbackQuestion.MSQ_ERROR_MIN_FOR_MIN_SELECTABLE_CHOICES);
+        if (isMinSelectableChoicesEnabled) {
+            if (minSelectableChoices < 1) {
+                errors.add(Const.FeedbackQuestion.MSQ_ERROR_MIN_FOR_MIN_SELECTABLE_CHOICES);
+            }
+            if (minSelectableChoices > numOfMsqChoicesForGeneratedOptions) {
+                errors.add(Const.FeedbackQuestion.MSQ_ERROR_MIN_SELECTABLE_MORE_THAN_NUM_CHOICES);
+            }
         }
 
         if (isMaxSelectableChoicesEnabled && isMinSelectableChoicesEnabled
@@ -851,11 +817,6 @@ public class FeedbackMsqQuestionDetails extends FeedbackQuestionDetails {
     }
 
     @Override
-    public Comparator<InstructorFeedbackResultsResponseRow> getResponseRowsSortOrder() {
-        return null;
-    }
-
-    @Override
     public boolean isFeedbackParticipantCommentsOnResponsesAllowed() {
         return false;
     }
@@ -879,6 +840,13 @@ public class FeedbackMsqQuestionDetails extends FeedbackQuestionDetails {
      */
     public int getMaxSelectableChoices() {
         return maxSelectableChoices;
+    }
+
+    /**
+     * Returns minimum selectable choices for this MSQ question.
+     */
+    public int getMinSelectableChoices() {
+        return minSelectableChoices;
     }
 
     /**

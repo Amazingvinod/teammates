@@ -5,6 +5,7 @@ import moment from 'moment-timezone';
 import { forkJoin, Observable, of } from 'rxjs';
 import { concatMap, finalize, flatMap, map, switchMap, tap } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
+import { CourseService } from '../../../services/course.service';
 import { FeedbackQuestionsService, NewQuestionModel } from '../../../services/feedback-questions.service';
 import { FeedbackSessionsService } from '../../../services/feedback-sessions.service';
 import { HttpRequestService } from '../../../services/http-request.service';
@@ -12,13 +13,15 @@ import { NavigationService } from '../../../services/navigation.service';
 import { StatusMessageService } from '../../../services/status-message.service';
 import { LOCAL_DATE_TIME_FORMAT, TimeResolvingResult, TimezoneService } from '../../../services/timezone.service';
 import {
+  Course,
+  Courses,
   FeedbackParticipantType,
   FeedbackQuestion,
   FeedbackQuestions,
   FeedbackQuestionType,
   FeedbackSession,
   FeedbackSessionPublishStatus, FeedbackSessions,
-  FeedbackSessionSubmissionStatus, FeedbackTextQuestionDetails, Instructor, Instructors,
+  FeedbackSessionSubmissionStatus, FeedbackTextQuestionDetails, HasResponses, Instructor, Instructors,
   NumberOfEntitiesToGiveFeedbackToSetting,
   ResponseVisibleSetting,
   SessionVisibleSetting, Student, Students,
@@ -35,7 +38,6 @@ import {
   SessionEditFormModel,
   TimeFormat,
 } from '../../components/session-edit-form/session-edit-form-model';
-import { Course, Courses } from '../../course';
 import { ErrorMessageOutput } from '../../error-message-output';
 import { Intent } from '../../Intent';
 import { InstructorSessionBasePageComponent } from '../instructor-session-base-page.component';
@@ -148,10 +150,16 @@ export class InstructorSessionEditPageComponent extends InstructorSessionBasePag
   instructorsCanBePreviewedAs: Instructor[] = [];
   emailOfInstructorToPreview: string = '';
 
-  constructor(router: Router, httpRequestService: HttpRequestService,
-              statusMessageService: StatusMessageService, navigationService: NavigationService,
-              feedbackSessionsService: FeedbackSessionsService, feedbackQuestionsService: FeedbackQuestionsService,
-              private route: ActivatedRoute, private timezoneService: TimezoneService, private modalService: NgbModal) {
+  constructor(router: Router,
+              httpRequestService: HttpRequestService,
+              statusMessageService: StatusMessageService,
+              navigationService: NavigationService,
+              feedbackSessionsService: FeedbackSessionsService,
+              feedbackQuestionsService: FeedbackQuestionsService,
+              private courseService: CourseService,
+              private route: ActivatedRoute,
+              private timezoneService: TimezoneService,
+              private modalService: NgbModal) {
     super(router, httpRequestService, statusMessageService, navigationService,
         feedbackSessionsService, feedbackQuestionsService);
   }
@@ -174,23 +182,22 @@ export class InstructorSessionEditPageComponent extends InstructorSessionBasePag
    */
   loadFeedbackSession(): void {
     // load the course of the feedback session first
-    this.httpRequestService.get('/course', { courseid: this.courseId })
-        .subscribe((course: Course) => {
-          this.courseName = course.courseName;
+    this.courseService.getCourseAsInstructor(this.courseId).subscribe((course: Course) => {
+      this.courseName = course.courseName;
 
-          // load feedback session
-          const paramMap: { [key: string]: string } = {
-            courseid: this.courseId,
-            fsname: this.feedbackSessionName,
-            intent: Intent.FULL_DETAIL,
-          };
-          this.httpRequestService.get('/session', paramMap)
-              .subscribe((feedbackSession: FeedbackSession) => {
-                this.sessionEditFormModel = this.getSessionEditFormModel(feedbackSession);
-              }, (resp: ErrorMessageOutput) => {
-                this.statusMessageService.showErrorMessage(resp.error.message);
-              });
+      // load feedback session
+      const paramMap: { [key: string]: string } = {
+        courseid: this.courseId,
+        fsname: this.feedbackSessionName,
+        intent: Intent.FULL_DETAIL,
+      };
+      this.httpRequestService.get('/session', paramMap)
+        .subscribe((feedbackSession: FeedbackSession) => {
+          this.sessionEditFormModel = this.getSessionEditFormModel(feedbackSession);
+        }, (resp: ErrorMessageOutput) => {
+          this.statusMessageService.showErrorMessage(resp.error.message);
         });
+    });
   }
 
   /**
@@ -198,7 +205,10 @@ export class InstructorSessionEditPageComponent extends InstructorSessionBasePag
    */
   copyCurrentSession(): void {
     // load course candidates first
-    this.httpRequestService.get('/courses').subscribe((courses: Courses) => {
+    this.httpRequestService.get('/courses', {
+      entitytype: 'instructor',
+      coursestatus: 'active',
+    }).subscribe((courses: Courses) => {
       const modalRef: NgbModalRef = this.modalService.open(CopySessionModalComponent);
       modalRef.componentInstance.newFeedbackSessionName = this.feedbackSessionName;
       modalRef.componentInstance.courseCandidates = courses.courses;
@@ -407,7 +417,9 @@ export class InstructorSessionEditPageComponent extends InstructorSessionBasePag
     this.httpRequestService.get('/questions', paramMap)
         .subscribe((response: FeedbackQuestions) => {
           response.questions.forEach((feedbackQuestion: FeedbackQuestion) => {
-            this.questionEditFormModels.push(this.getQuestionEditFormModel(feedbackQuestion));
+            const addedQuestionEditFormModel: QuestionEditFormModel = this.getQuestionEditFormModel(feedbackQuestion);
+            this.questionEditFormModels.push(addedQuestionEditFormModel);
+            this.loadResponseStatusForQuestion(addedQuestionEditFormModel);
             this.feedbackQuestionModels.set(feedbackQuestion.feedbackQuestionId, feedbackQuestion);
           });
         }, (resp: ErrorMessageOutput) => this.statusMessageService.showErrorMessage(resp.error.message));
@@ -452,6 +464,16 @@ export class InstructorSessionEditPageComponent extends InstructorSessionBasePag
       isEditable: false,
       isSaving: false,
     };
+  }
+
+  /**
+   * Loads the isQuestionHasResponses value for a question edit for model.
+   */
+  private loadResponseStatusForQuestion(model: QuestionEditFormModel): void {
+    this.feedbackSessionsService.hasResponsesForQuestion(model.feedbackQuestionId)
+      .subscribe((resp: HasResponses) => {
+        model.isQuestionHasResponses = resp.hasResponses;
+      }, (resp: ErrorMessageOutput) => { this.statusMessageService.showErrorMessage(resp.error.message); });
   }
 
   /**
@@ -713,9 +735,7 @@ export class InstructorSessionEditPageComponent extends InstructorSessionBasePag
   copyQuestionsFromOtherSessionsHandler(): void {
     const questionToCopyCandidates: QuestionToCopyCandidate[] = [];
 
-    this.httpRequestService.get('/sessions', {
-      isinrecyclebin: 'false',
-    }).pipe(
+    this.feedbackSessionsService.getFeedbackSessionsForInstructor().pipe(
         switchMap((sessions: FeedbackSessions) => of(...sessions.feedbackSessions)),
         flatMap((session: FeedbackSession) => {
           const paramMap: { [key: string]: string } = {

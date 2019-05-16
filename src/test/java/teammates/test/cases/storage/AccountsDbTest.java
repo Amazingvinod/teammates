@@ -1,15 +1,14 @@
 package teammates.test.cases.storage;
 
-import java.util.ArrayList;
-import java.util.List;
-
 import org.testng.annotations.Test;
 
 import teammates.common.datatransfer.attributes.AccountAttributes;
+import teammates.common.exception.EntityAlreadyExistsException;
 import teammates.common.exception.EntityDoesNotExistException;
 import teammates.common.exception.InvalidParametersException;
 import teammates.common.util.Const;
 import teammates.common.util.FieldValidator;
+import teammates.common.util.JsonUtils;
 import teammates.storage.api.AccountsDb;
 import teammates.test.cases.BaseComponentTestCase;
 import teammates.test.driver.AssertHelper;
@@ -46,70 +45,37 @@ public class AccountsDbTest extends BaseComponentTestCase {
     }
 
     @Test
-    public void testGetInstructorAccounts() throws Exception {
-        int numOfInstructors = 3;
-
-        // a non-instructor account
-        createNewAccount();
-
-        List<AccountAttributes> instructorAccountsExpected = createInstructorAccounts(numOfInstructors);
-        List<AccountAttributes> instructorAccountsActual = accountsDb.getInstructorAccounts();
-
-        assertEquals(numOfInstructors, instructorAccountsActual.size());
-
-        for (int i = 0; i < numOfInstructors; i++) {
-            // remove the created/modified dates due to their unpredictable nature
-            instructorAccountsExpected.get(i).createdAt = null;
-            instructorAccountsActual.get(i).createdAt = null;
-        }
-
-        AssertHelper.assertSameContentIgnoreOrder(instructorAccountsExpected, instructorAccountsActual);
-
-        deleteInstructorAccounts(numOfInstructors);
-    }
-
-    private List<AccountAttributes> createInstructorAccounts(
-            int numOfInstructors) throws Exception {
-        AccountAttributes a;
-        List<AccountAttributes> result = new ArrayList<>();
-        for (int i = 0; i < numOfInstructors; i++) {
-            a = getNewAccountAttributes();
-            a.googleId = "id." + i;
-            a.isInstructor = true;
-            accountsDb.createAccount(a);
-            result.add(a);
-        }
-        return result;
-    }
-
-    private void deleteInstructorAccounts(int numOfInstructors) {
-        String googleId;
-        for (int i = 0; i < numOfInstructors; i++) {
-            googleId = "id." + i;
-            accountsDb.deleteAccount(googleId);
-        }
-    }
-
-    @Test
     public void testCreateAccount() throws Exception {
 
         ______TS("typical success case (legacy data)");
-        AccountAttributes a = AccountAttributes.builder()
-                .withGoogleId("test.account")
+        AccountAttributes a = AccountAttributes.builder("test.account")
                 .withName("Test account Name")
                 .withIsInstructor(false)
                 .withEmail("fresh-account@email.com")
                 .withInstitute("TEAMMATES Test Institute 1")
                 .build();
 
-        accountsDb.createAccount(a);
+        accountsDb.createEntity(a);
+
+        ______TS("duplicate account, creation fail");
+
+        AccountAttributes duplicatedAccount = AccountAttributes.builder("test.account")
+                .withName("name2")
+                .withEmail("test2@email.com")
+                .withInstitute("de2v")
+                .withIsInstructor(false)
+                .build();
+        assertThrows(EntityAlreadyExistsException.class, () -> {
+            accountsDb.createEntity(duplicatedAccount);
+        });
+
         accountsDb.deleteAccount(a.googleId);
 
         // Should we not allow empty fields?
         ______TS("failure case: invalid parameter");
         a.email = "invalid email";
         InvalidParametersException ipe = assertThrows(InvalidParametersException.class,
-                () -> accountsDb.createAccount(a));
+                () -> accountsDb.createEntity(a));
         AssertHelper.assertContains(
                 getPopulatedErrorMessage(
                         FieldValidator.EMAIL_ERROR_MESSAGE, "invalid email",
@@ -118,12 +84,34 @@ public class AccountsDbTest extends BaseComponentTestCase {
                 ipe.getMessage());
 
         ______TS("failure: null parameter");
-        AssertionError ae = assertThrows(AssertionError.class, () -> accountsDb.createAccount(null));
+        AssertionError ae = assertThrows(AssertionError.class, () -> accountsDb.createEntity(null));
         assertEquals(Const.StatusCodes.DBLEVEL_NULL_INPUT, ae.getMessage());
     }
 
     @Test
-    public void testEditAccount() throws Exception {
+    public void testUpdateAccount_noChangeToAccount_shouldNotIssueSaveRequest() throws Exception {
+        AccountAttributes a = createNewAccount();
+
+        AccountAttributes updatedAccount =
+                accountsDb.updateAccount(
+                        AccountAttributes.updateOptionsBuilder(a.getGoogleId())
+                                .build());
+
+        // please verify the log message manually to ensure that saving request is not issued
+        assertEquals(JsonUtils.toJson(a), JsonUtils.toJson(updatedAccount));
+
+        updatedAccount =
+                accountsDb.updateAccount(
+                        AccountAttributes.updateOptionsBuilder(a.getGoogleId())
+                                .withIsInstructor(a.isInstructor())
+                                .build());
+
+        // please verify the log message manually to ensure that saving request is not issued
+        assertEquals(JsonUtils.toJson(a), JsonUtils.toJson(updatedAccount));
+    }
+
+    @Test
+    public void testUpdateAccount() throws Exception {
         AccountAttributes a = createNewAccount();
 
         ______TS("typical edit success case");
@@ -147,7 +135,7 @@ public class AccountsDbTest extends BaseComponentTestCase {
                                 .withIsInstructor(true)
                                 .build()
                 ));
-        AssertHelper.assertContains(AccountsDb.ERROR_UPDATE_NON_EXISTENT_ACCOUNT, ednee.getMessage());
+        AssertHelper.assertContains(AccountsDb.ERROR_UPDATE_NON_EXISTENT, ednee.getMessage());
 
         ______TS("failure: null parameter");
 
@@ -158,9 +146,29 @@ public class AccountsDbTest extends BaseComponentTestCase {
         accountsDb.deleteAccount(a.googleId);
     }
 
+    // the test is to ensure that optimized saving policy is implemented without false negative
+    @Test
+    public void testUpdateAccount_singleFieldUpdate_shouldUpdateCorrectly() throws Exception {
+        AccountAttributes typicalAccount = createNewAccount();
+
+        assertFalse(typicalAccount.isInstructor());
+        AccountAttributes updatedAccount = accountsDb.updateAccount(
+                AccountAttributes.updateOptionsBuilder(typicalAccount.googleId)
+                        .withIsInstructor(true)
+                        .build());
+        AccountAttributes actualAccount = accountsDb.getAccount(typicalAccount.googleId);
+        assertTrue(actualAccount.isInstructor());
+        assertTrue(updatedAccount.isInstructor());
+    }
+
     @Test
     public void testDeleteAccount() throws Exception {
         AccountAttributes a = createNewAccount();
+
+        ______TS("silent deletion of non-existent account");
+
+        accountsDb.deleteAccount("not_exist");
+        assertNotNull(accountsDb.getAccount(a.googleId));
 
         ______TS("typical success case");
         AccountAttributes newAccount = accountsDb.getAccount(a.googleId);
@@ -174,7 +182,7 @@ public class AccountsDbTest extends BaseComponentTestCase {
         ______TS("silent deletion of same account");
         accountsDb.deleteAccount(a.googleId);
 
-        ______TS("failure null paramter");
+        ______TS("failure null parameter");
 
         AssertionError ae = assertThrows(AssertionError.class,
                 () -> accountsDb.deleteAccount(null));
@@ -183,13 +191,11 @@ public class AccountsDbTest extends BaseComponentTestCase {
 
     private AccountAttributes createNewAccount() throws Exception {
         AccountAttributes a = getNewAccountAttributes();
-        accountsDb.createAccount(a);
-        return a;
+        return accountsDb.putEntity(a);
     }
 
     private AccountAttributes getNewAccountAttributes() {
-        return AccountAttributes.builder()
-                .withGoogleId("valid.googleId")
+        return AccountAttributes.builder("valid.googleId")
                 .withName("Valid Fresh Account")
                 .withIsInstructor(false)
                 .withEmail("valid@email.com")

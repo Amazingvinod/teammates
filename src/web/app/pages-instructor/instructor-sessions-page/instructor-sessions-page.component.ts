@@ -15,6 +15,8 @@ import {
   TimezoneService,
 } from '../../../services/timezone.service';
 import {
+  Course,
+  Courses,
   FeedbackQuestion,
   FeedbackSession, FeedbackSessionPublishStatus,
   FeedbackSessions,
@@ -22,6 +24,7 @@ import {
   ResponseVisibleSetting,
   SessionVisibleSetting,
 } from '../../../types/api-output';
+import { DEFAULT_INSTRUCTOR_PRIVILEGE } from '../../../types/instructor-privilege';
 import {
   DateFormat,
   SessionEditFormMode,
@@ -33,9 +36,7 @@ import {
   SessionsTableColumn, SessionsTableHeaderColorScheme,
   SessionsTableRowModel, SortBy, SortOrder,
 } from '../../components/sessions-table/sessions-table-model';
-import { Course, Courses } from '../../course';
 import { ErrorMessageOutput } from '../../error-message-output';
-import { defaultInstructorPrivilege } from '../../instructor-privilege';
 import { InstructorSessionBasePageComponent } from '../instructor-session-base-page.component';
 import { CopyFromOtherSessionsResult } from './copy-from-other-sessions-modal/copy-from-other-sessions-modal-model';
 import {
@@ -167,7 +168,10 @@ export class InstructorSessionsPageComponent extends InstructorSessionBasePageCo
    * Loads courses owned by the current user.
    */
   loadCandidatesCourse(): void {
-    this.httpRequestService.get('/courses').subscribe((courses: Courses) => {
+    this.httpRequestService.get('/courses', {
+      entitytype: 'instructor',
+      coursestatus: 'active',
+    }).subscribe((courses: Courses) => {
       this.courseCandidates = courses.courses;
 
       this.initDefaultValuesForSessionEditForm();
@@ -344,23 +348,22 @@ export class InstructorSessionsPageComponent extends InstructorSessionBasePageCo
    * Loads all feedback sessions that can be accessed by current user.
    */
   loadFeedbackSessions(): void {
-    this.httpRequestService.get('/sessions', {
-      isinrecyclebin: 'false',
-    }).subscribe((response: FeedbackSessions) => {
-      response.feedbackSessions.forEach((session: FeedbackSession) => {
-        const model: SessionsTableRowModel = {
-          feedbackSession: session,
-          responseRate: '',
-          isLoadingResponseRate: false,
+    this.feedbackSessionsService.getFeedbackSessionsForInstructor()
+        .subscribe((response: FeedbackSessions) => {
+          response.feedbackSessions.forEach((session: FeedbackSession) => {
+            const model: SessionsTableRowModel = {
+              feedbackSession: session,
+              responseRate: '',
+              isLoadingResponseRate: false,
 
-          instructorPrivilege: defaultInstructorPrivilege,
-        };
-        this.sessionsTableRowModels.push(model);
-        this.updateInstructorPrivilege(model);
-      });
-    }, (resp: ErrorMessageOutput) => {
-      this.statusMessageService.showErrorMessage(resp.error.message);
-    });
+              instructorPrivilege: DEFAULT_INSTRUCTOR_PRIVILEGE,
+            };
+            this.sessionsTableRowModels.push(model);
+            this.updateInstructorPrivilege(model);
+          });
+        }, (resp: ErrorMessageOutput) => {
+          this.statusMessageService.showErrorMessage(resp.error.message);
+        });
   }
 
   /**
@@ -426,8 +429,8 @@ export class InstructorSessionsPageComponent extends InstructorSessionBasePageCo
   /**
    * Views the result of a feedback session.
    */
-  viewSessionResultEventHandler(): void {
-    this.viewSessionResult();
+  viewSessionResultEventHandler(rowIndex: number): void {
+    this.viewSessionResult(this.sessionsTableRowModels[rowIndex]);
   }
 
   /**
@@ -448,31 +451,30 @@ export class InstructorSessionsPageComponent extends InstructorSessionBasePageCo
    * Sends e-mails to remind students on the published results link.
    */
   resendResultsLinkToStudentsEventHandler(remindInfo: any): void {
-    this.resendResultsLinkToStudents(this.sessionsTableRowModels[remindInfo.row], remindInfo.students);
+    this.resendResultsLinkToStudents(this.sessionsTableRowModels[remindInfo.row], remindInfo.request);
   }
 
   /**
    * Sends e-mails to remind students who have not submitted their feedback.
    */
   sendRemindersToStudentsEventHandler(remindInfo: any): void {
-    this.sendRemindersToStudents(this.sessionsTableRowModels[remindInfo.row], remindInfo.users);
+    this.sendRemindersToStudents(this.sessionsTableRowModels[remindInfo.row], remindInfo.request);
   }
 
   /**
    * Loads all feedback sessions in recycle bin that can be accessed by current user.
    */
   loadRecycleBinFeedbackSessions(): void {
-    this.httpRequestService.get('/sessions', {
-      isinrecyclebin: 'true',
-    }).subscribe((response: FeedbackSessions) => {
-      response.feedbackSessions.forEach((session: FeedbackSession) => {
-        this.recycleBinFeedbackSessionRowModels.push({
-          feedbackSession: session,
+    this.feedbackSessionsService.getFeedbackSessionsInRecycleBinForInstructor()
+        .subscribe((response: FeedbackSessions) => {
+          response.feedbackSessions.forEach((session: FeedbackSession) => {
+            this.recycleBinFeedbackSessionRowModels.push({
+              feedbackSession: session,
+            });
+          });
+        }, (resp: ErrorMessageOutput) => {
+          this.statusMessageService.showErrorMessage(resp.error.message);
         });
-      });
-    }, (resp: ErrorMessageOutput) => {
-      this.statusMessageService.showErrorMessage(resp.error.message);
-    });
   }
 
   /**
@@ -504,7 +506,7 @@ export class InstructorSessionsPageComponent extends InstructorSessionBasePageCo
             feedbackSession,
             responseRate: '',
             isLoadingResponseRate: false,
-            instructorPrivilege: defaultInstructorPrivilege,
+            instructorPrivilege: DEFAULT_INSTRUCTOR_PRIVILEGE,
           };
           this.sessionsTableRowModels.push(m);
           this.updateInstructorPrivilege(m);
@@ -532,7 +534,7 @@ export class InstructorSessionsPageComponent extends InstructorSessionBasePageCo
           feedbackSession: session,
           responseRate: '',
           isLoadingResponseRate: false,
-          instructorPrivilege: defaultInstructorPrivilege,
+          instructorPrivilege: DEFAULT_INSTRUCTOR_PRIVILEGE,
         };
         this.sessionsTableRowModels.push(m);
         this.updateInstructorPrivilege(m);

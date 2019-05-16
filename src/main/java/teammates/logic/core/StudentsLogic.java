@@ -3,11 +3,8 @@ package teammates.logic.core;
 import java.util.ArrayList;
 import java.util.List;
 
-import teammates.common.datatransfer.CourseEnrollmentResult;
-import teammates.common.datatransfer.StudentAttributesFactory;
-import teammates.common.datatransfer.StudentEnrollDetails;
+import teammates.common.datatransfer.AttributesDeletionQuery;
 import teammates.common.datatransfer.StudentSearchResultBundle;
-import teammates.common.datatransfer.StudentUpdateStatus;
 import teammates.common.datatransfer.TeamDetailsBundle;
 import teammates.common.datatransfer.attributes.InstructorAttributes;
 import teammates.common.datatransfer.attributes.StudentAttributes;
@@ -35,7 +32,6 @@ public final class StudentsLogic {
 
     private static final StudentsDb studentsDb = new StudentsDb();
 
-    private static final CoursesLogic coursesLogic = CoursesLogic.inst();
     private static final FeedbackResponsesLogic frLogic = FeedbackResponsesLogic.inst();
     private static final FeedbackSessionsLogic fsLogic = FeedbackSessionsLogic.inst();
 
@@ -47,19 +43,24 @@ public final class StudentsLogic {
         return instance;
     }
 
-    public void createStudentCascade(StudentAttributes studentData)
-            throws InvalidParametersException, EntityAlreadyExistsException, EntityDoesNotExistException {
-        studentsDb.createStudent(studentData);
-
-        if (!coursesLogic.isCoursePresent(studentData.course)) {
-            throw new EntityDoesNotExistException(
-                    "Course does not exist [" + studentData.course + "]");
-        }
-
+    /**
+     * Creates a student.
+     *
+     * @return the created student
+     * @throws InvalidParametersException if the student is not valid
+     * @throws EntityAlreadyExistsException if the student already exists in the Datastore
+     */
+    public StudentAttributes createStudent(StudentAttributes studentData)
+            throws InvalidParametersException, EntityAlreadyExistsException {
+        return studentsDb.createEntity(studentData);
     }
 
     public StudentAttributes getStudentForEmail(String courseId, String email) {
         return studentsDb.getStudentForEmail(courseId, email);
+    }
+
+    public List<StudentAttributes> getAllStudentsForEmail(String email) {
+        return studentsDb.getAllStudentsForEmail(email);
     }
 
     public StudentAttributes getStudentForCourseIdAndGoogleId(String courseId, String googleId) {
@@ -209,55 +210,6 @@ public final class StudentsLogic {
         }
     }
 
-    public CourseEnrollmentResult enrollStudents(String enrollLines, String courseId)
-            throws EntityDoesNotExistException, EnrollException, InvalidParametersException, EntityAlreadyExistsException {
-
-        if (!coursesLogic.isCoursePresent(courseId)) {
-            throw new EntityDoesNotExistException("Course does not exist :"
-                    + courseId);
-        }
-
-        if (enrollLines.isEmpty()) {
-            throw new EnrollException(Const.StatusMessages.ENROLL_LINE_EMPTY);
-        }
-
-        List<StudentAttributes> studentList = createStudents(enrollLines, courseId);
-        List<StudentAttributes> returnList = new ArrayList<>();
-        List<StudentEnrollDetails> enrollmentList = new ArrayList<>();
-
-        verifyIsWithinSizeLimitPerEnrollment(studentList);
-        validateSectionsAndTeams(studentList, courseId);
-
-        // TODO: can we use a batch persist operation here?
-        // enroll all students
-        for (StudentAttributes student : studentList) {
-            StudentEnrollDetails enrollmentDetails;
-
-            enrollmentDetails = enrollStudent(student);
-            student.updateStatus = enrollmentDetails.updateStatus;
-
-            enrollmentList.add(enrollmentDetails);
-            returnList.add(student);
-        }
-
-        // add to return list students not included in the enroll list.
-        List<StudentAttributes> studentsInCourse = getStudentsForCourse(courseId);
-        for (StudentAttributes student : studentsInCourse) {
-            if (!isInEnrollList(student, returnList)) {
-                student.updateStatus = StudentUpdateStatus.NOT_IN_ENROLL_LIST;
-                returnList.add(student);
-            }
-        }
-
-        return new CourseEnrollmentResult(returnList, enrollmentList);
-    }
-
-    private void verifyIsWithinSizeLimitPerEnrollment(List<StudentAttributes> students) throws EnrollException {
-        if (students.size() > Const.SIZE_LIMIT_PER_ENROLLMENT) {
-            throw new EnrollException(Const.StatusMessages.QUOTA_PER_ENROLLMENT_EXCEED);
-        }
-    }
-
     /**
      * Validates sections for any limit violations and teams for any team name violations.
      */
@@ -381,29 +333,39 @@ public final class StudentsLogic {
         return errorMessage.toString();
     }
 
-    public void deleteAllStudentsInCourse(String courseId) {
+    /**
+     * Deletes all the students in the course cascade their associated responses and comments.
+     */
+    public void deleteStudentsInCourseCascade(String courseId) {
         List<StudentAttributes> studentsInCourse = getStudentsForCourse(courseId);
         for (StudentAttributes student : studentsInCourse) {
             deleteStudentCascade(courseId, student.email);
         }
     }
 
+    /**
+     * Deletes a student cascade its associated feedback responses and comments.
+     *
+     * <p>Fails silently if the student does not exist.
+     */
     public void deleteStudentCascade(String courseId, String studentEmail) {
-        // delete responses before deleting the student as we need to know the student's team.
-        frLogic.deleteFeedbackResponsesForStudentAndCascade(courseId, studentEmail);
-        fsLogic.deleteStudentFromRespondentsList(getStudentForEmail(courseId, studentEmail));
+        StudentAttributes student = getStudentForEmail(courseId, studentEmail);
+        if (student == null) {
+            return;
+        }
+
+        frLogic.deleteFeedbackResponsesInvolvedStudentOfCourseCascade(courseId, studentEmail);
+        if (studentsDb.getStudentsForTeam(student.getTeam(), student.getCourse()).size() == 1) {
+            // the student is the only student in the team
+            frLogic.deleteFeedbackResponsesInvolvedTeamOfCourseCascade(student.getCourse(), student.getTeam());
+        }
         studentsDb.deleteStudent(courseId, studentEmail);
     }
 
-    public void deleteStudentsForGoogleId(String googleId) {
-        List<StudentAttributes> students = studentsDb.getStudentsForGoogleId(googleId);
-        for (StudentAttributes student : students) {
-            fsLogic.deleteStudentFromRespondentsList(student);
-        }
-        studentsDb.deleteStudentsForGoogleId(googleId);
-    }
-
-    public void deleteStudentsForGoogleIdAndCascade(String googleId) {
+    /**
+     * Deletes all students associated a googleId and cascade its associated feedback responses and comments.
+     */
+    public void deleteStudentsForGoogleIdCascade(String googleId) {
         List<StudentAttributes> students = studentsDb.getStudentsForGoogleId(googleId);
 
         // Cascade delete students
@@ -412,8 +374,11 @@ public final class StudentsLogic {
         }
     }
 
-    public void deleteStudentsForCourse(String courseId) {
-        studentsDb.deleteStudentsForCourse(courseId);
+    /**
+     * Deletes students using {@link AttributesDeletionQuery}.
+     */
+    public void deleteStudents(AttributesDeletionQuery query) {
+        studentsDb.deleteStudents(query);
     }
 
     /**
@@ -421,132 +386,6 @@ public final class StudentsLogic {
      */
     public void putDocuments(List<StudentAttributes> students) {
         studentsDb.putDocuments(students);
-    }
-
-    private StudentEnrollDetails enrollStudent(StudentAttributes validStudentAttributes)
-            throws InvalidParametersException, EntityDoesNotExistException, EntityAlreadyExistsException {
-        StudentAttributes originalStudentAttributes = getStudentForEmail(
-                validStudentAttributes.course, validStudentAttributes.email);
-
-        StudentEnrollDetails enrollmentDetails = new StudentEnrollDetails();
-        enrollmentDetails.course = validStudentAttributes.course;
-        enrollmentDetails.email = validStudentAttributes.email;
-        enrollmentDetails.newTeam = validStudentAttributes.team;
-        enrollmentDetails.newSection = validStudentAttributes.section;
-
-        boolean isModifyingExistingStudent = originalStudentAttributes != null;
-        if (validStudentAttributes.isEnrollInfoSameAs(originalStudentAttributes)) {
-            enrollmentDetails.updateStatus = StudentUpdateStatus.UNMODIFIED;
-        } else if (isModifyingExistingStudent) {
-            updateStudentCascade(
-                    StudentAttributes.updateOptionsBuilder(originalStudentAttributes.course, originalStudentAttributes.email)
-                            .withName(validStudentAttributes.name)
-                            .withTeamName(validStudentAttributes.team)
-                            .withSectionName(validStudentAttributes.section)
-                            .withComment(validStudentAttributes.comments)
-                            .build());
-            enrollmentDetails.updateStatus = StudentUpdateStatus.MODIFIED;
-
-            if (!originalStudentAttributes.team.equals(validStudentAttributes.team)) {
-                enrollmentDetails.oldTeam = originalStudentAttributes.team;
-            }
-            if (!originalStudentAttributes.section.equals(validStudentAttributes.section)) {
-                enrollmentDetails.oldSection = originalStudentAttributes.section;
-            }
-        } else {
-            createStudentCascade(validStudentAttributes);
-            enrollmentDetails.updateStatus = StudentUpdateStatus.NEW;
-        }
-
-        return enrollmentDetails;
-    }
-
-    /**
-     * Builds {@code studentList} from user input {@code lines}. All empty lines or lines with only white spaces will
-     * be skipped.
-     *
-     * @param lines the enrollment lines entered by the instructor.
-     * @throws EnrollException if some of the student instances created are invalid. The exception message contains
-     *         invalidity info for all invalid student instances in HTML format.
-     */
-    public List<StudentAttributes> createStudents(String lines, String courseId) throws EnrollException {
-        List<String> invalidityInfo = new ArrayList<>();
-        String[] linesArray = lines.split(System.lineSeparator());
-        List<StudentAttributes> studentList = new ArrayList<>();
-
-        StudentAttributesFactory saf = new StudentAttributesFactory(linesArray[0]);
-
-        for (int i = 1; i < linesArray.length; i++) {
-            String line = linesArray[i];
-            String sanitizedLine = SanitizationHelper.sanitizeForHtml(line);
-            if (StringHelper.isWhiteSpace(line)) {
-                continue;
-            }
-            try {
-                StudentAttributes student = saf.makeStudent(line, courseId);
-
-                if (!student.isValid()) {
-                    invalidityInfo.add(invalidStudentInfo(sanitizedLine, student));
-                }
-
-                int duplicateEmailIndex = getDuplicateEmailIndex(student.email, studentList);
-                if (duplicateEmailIndex != -1) {
-                    invalidityInfo.add(duplicateEmailInfo(sanitizedLine, linesArray[duplicateEmailIndex + 1]));
-                }
-
-                studentList.add(student);
-            } catch (EnrollException e) {
-                invalidityInfo.add(enrollExceptionInfo(sanitizedLine, e.getMessage()));
-            }
-        }
-
-        if (!invalidityInfo.isEmpty()) {
-            throw new EnrollException(StringHelper.toString(invalidityInfo, "<br>"));
-        }
-
-        return studentList;
-    }
-
-    /**
-     * Returns a {@code String} containing the invalid information of the {@code student}
-     * and the corresponding sanitized invalid {@code userInput}.
-     */
-    private String invalidStudentInfo(String userInput, StudentAttributes student) {
-        String info = StringHelper.toString(SanitizationHelper.sanitizeForHtml(student.getInvalidityInfo()),
-                "<br>" + Const.StatusMessages.ENROLL_LINES_PROBLEM_DETAIL_PREFIX + " ");
-        return String.format(Const.StatusMessages.ENROLL_LINES_PROBLEM, userInput, info);
-    }
-
-    /**
-     * Returns the index of the first occurrence of the duplicate {@code email} in
-     * {@code studentList}, or -1 if {@code email} is not a duplicate in {@code studentList}.
-     */
-    private int getDuplicateEmailIndex(String email, List<StudentAttributes> studentList) {
-        for (int index = 0; index < studentList.size(); index++) {
-            if (studentList.get(index).email.equals(email)) {
-                return index;
-            }
-        }
-        return -1;
-    }
-
-    /**
-     * Returns a {@code String} containing the duplicate email information in {@code duplicateEmailInfo} and
-     * the corresponding sanitized invalid {@code userInput}.
-     */
-    private String duplicateEmailInfo(String userInput, String duplicateEmailInfo) {
-        String info =
-                Const.StatusMessages.DUPLICATE_EMAIL_INFO + " \"" + duplicateEmailInfo + "\""
-                + "<br>" + Const.StatusMessages.ENROLL_LINES_PROBLEM_DETAIL_PREFIX + " ";
-        return String.format(Const.StatusMessages.ENROLL_LINES_PROBLEM, userInput, info);
-    }
-
-    /**
-     * Returns a {@code String} containing the enrollment exception information using the {@code errorMessage}
-     * and the corresponding sanitized invalid {@code userInput}.
-     */
-    private String enrollExceptionInfo(String userInput, String errorMessage) {
-        return String.format(Const.StatusMessages.ENROLL_LINES_PROBLEM, userInput, errorMessage);
     }
 
     private boolean isInEnrollList(StudentAttributes student,
